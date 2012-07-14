@@ -40,3 +40,32 @@ unless compute.security_groups.any? { |g| g.name == security_group }
   group.authorize_port_range(3389..3389)
   group.authorize_port_range(5985..5986)
 end
+
+server = compute.servers.create(
+  tags:              { name: 'Windows prototype instance' },
+  availability_zone: Chef::Config[:knife][:availability_zone],
+  image_id:          Chef::Config[:knife][:image],
+  flavor_id:         Chef::Config[:knife][:flavor],
+  key_name:          key_name
+)
+
+puts 'Waiting for password generation...'
+server.wait_for { ready? }
+
+encrypted_password = nil
+while !encrypted_password
+  password_data      = compute.get_password_data(server.id)
+  encrypted_password = password_data.body['passwordData']
+  sleep 1
+end
+
+key      = OpenSSL::PKey::RSA.new(key_file.read)
+password = key.private_decrypt(Base64.decode64(encrypted_password))
+
+puts 'Creating image...'
+response = compute.create_image(server.id, key_name, "Password is #{password}")
+puts 'done.'
+puts
+
+puts "Image ID: #{response['imageId']}"
+puts "Password: #{password}"
