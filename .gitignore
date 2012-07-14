@@ -1,0 +1,4 @@
+/.chef/knife.rb
+*.pem
+/cookbooks
+/tmp

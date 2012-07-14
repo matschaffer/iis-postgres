@@ -1,0 +1,42 @@
+#!/usr/bin/env ruby
+
+# newb:
+# Creates a new keypair, security group and AMI with a pre-generated password
+# that can be used to configure new windows instances.
+
+require 'rubygems'
+require 'bundler/setup'
+
+require 'fog'
+require 'chef/config'
+require 'pathname'
+require 'pry'
+require 'pry-nav'
+
+chef_path = Pathname.new(__FILE__).dirname.join('..', '.chef')
+
+config_file = chef_path.join('knife.rb')
+Chef::Config.from_file(config_file.to_s)
+
+compute = Fog::Compute.new(
+  provider: 'AWS',
+  aws_access_key_id: Chef::Config[:knife][:aws_access_key_id],
+  aws_secret_access_key: Chef::Config[:knife][:aws_secret_access_key]
+)
+
+key_name = Chef::Config[:knife][:aws_ssh_key_id]
+key_file = chef_path.join(key_name + '.pem')
+unless key_file.exist?
+  key = compute.key_pairs.create(name: key_name)
+  key.write(key_file)
+end
+
+security_group = key_name
+unless compute.security_groups.any? { |g| g.name == security_group }
+  group = compute.security_groups.create(
+    name: security_group,
+    description: "Created by #{ENV['USER']} via #{__FILE__}",
+  )
+  group.authorize_port_range(3389..3389)
+  group.authorize_port_range(5985..5986)
+end
