@@ -49,43 +49,49 @@ unless compute.security_groups.any? { |g| g.name == security_group }
   group.authorize_port_range(5985..5986)
 end
 
-puts "Launching prototype instance..."
-server = compute.servers.create(
-  tags:              { name: 'Windows prototype instance' },
-  availability_zone: Chef::Config[:knife][:availability_zone],
-  image_id:          'ami-2ccd6e45',
-  flavor_id:         Chef::Config[:knife][:flavor],
-  key_name:          key_name
-)
+unless Chef::Config[:knife][:image] =~ /^ami-/
+  puts "Launching prototype instance..."
+  server = compute.servers.create(
+    tags:              { name: 'Windows prototype instance' },
+    availability_zone: Chef::Config[:knife][:availability_zone],
+    image_id:          'ami-2ccd6e45',
+    flavor_id:         Chef::Config[:knife][:flavor],
+    key_name:          key_name
+  )
 
-print 'Waiting for password generation...'
-server.wait_for { ready? }
+  print 'Waiting for password generation...'
+  server.wait_for { ready? }
 
-encrypted_password = nil
-while !encrypted_password
-  password_data      = compute.get_password_data(server.id)
-  encrypted_password = password_data.body['passwordData']
-  print '.'
-  sleep 1
+  encrypted_password = nil
+  while !encrypted_password
+    password_data      = compute.get_password_data(server.id)
+    encrypted_password = password_data.body['passwordData']
+    print '.'
+    sleep 1
+  end
+  puts
+
+  key      = OpenSSL::PKey::RSA.new(key_file.read)
+  password = key.private_decrypt(Base64.decode64(encrypted_password))
+
+  print 'Creating image...'
+  response = compute.create_image(server.id, key_name, "Password is #{password}")
+  image_id = response.body["imageId"]
+  while compute.describe_images("image-id" => image_id).body["imagesSet"].first["imageState"] != "available"
+    sleep 1
+    print '.'
+  end
+  puts
+
+  print 'Destroying prototype server...'
+  server.destroy
+  puts " done."
+
+  puts <<-TXT
+    Please ensure these lines are entered into #{config_file}:
+
+        knife[:image]          = "#{image_id}"
+        knife[:winrm_password] = "#{password}"
+
+  TXT
 end
-puts
-
-key      = OpenSSL::PKey::RSA.new(key_file.read)
-password = key.private_decrypt(Base64.decode64(encrypted_password))
-
-puts 'Creating image...'
-response = compute.create_image(server.id, key_name, "Password is #{password}")
-image_id = response.body["imageId"]
-
-puts 'Destroying prototype server...'
-server.destroy
-
-puts <<-TXT
-done.
-
-Please ensure these lines are entered into #{config_file}:
-
-    knife[:image]          = "#{image_id}"
-    knife[:winrm_password] = "#{password}"
-
-TXT
