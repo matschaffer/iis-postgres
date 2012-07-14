@@ -10,8 +10,6 @@ require 'bundler/setup'
 require 'fog'
 require 'chef/config'
 require 'pathname'
-require 'pry'
-require 'pry-nav'
 
 chef_path = Pathname.new(__FILE__).dirname.join('..', '.chef')
 
@@ -24,6 +22,7 @@ compute = Fog::Compute.new(
   aws_secret_access_key: Chef::Config[:knife][:aws_secret_access_key]
 )
 
+puts "Creating keypair..."
 key_name = Chef::Config[:knife][:aws_ssh_key_id]
 key_file = chef_path.join(key_name + '.pem')
 unless key_file.exist?
@@ -31,6 +30,7 @@ unless key_file.exist?
   key.write(key_file)
 end
 
+puts "Creating security group..."
 security_group = key_name
 unless compute.security_groups.any? { |g| g.name == security_group }
   group = compute.security_groups.create(
@@ -41,31 +41,43 @@ unless compute.security_groups.any? { |g| g.name == security_group }
   group.authorize_port_range(5985..5986)
 end
 
+puts "Launching prototype instance..."
 server = compute.servers.create(
   tags:              { name: 'Windows prototype instance' },
   availability_zone: Chef::Config[:knife][:availability_zone],
-  image_id:          Chef::Config[:knife][:image],
+  image_id:          'ami-2ccd6e45',
   flavor_id:         Chef::Config[:knife][:flavor],
   key_name:          key_name
 )
 
-puts 'Waiting for password generation...'
+print 'Waiting for password generation...'
 server.wait_for { ready? }
 
 encrypted_password = nil
 while !encrypted_password
   password_data      = compute.get_password_data(server.id)
   encrypted_password = password_data.body['passwordData']
+  print '.'
   sleep 1
 end
+puts
 
 key      = OpenSSL::PKey::RSA.new(key_file.read)
 password = key.private_decrypt(Base64.decode64(encrypted_password))
 
 puts 'Creating image...'
 response = compute.create_image(server.id, key_name, "Password is #{password}")
-puts 'done.'
-puts
+image_id = response.body["imageId"]
 
-puts "Image ID: #{response['imageId']}"
-puts "Password: #{password}"
+puts 'Destroying prototype server...'
+server.destroy
+
+puts <<-TXT
+done.
+
+Please ensure these lines are entered into #{config_file}:
+
+    knife[:image]          = "#{image_id}"
+    knife[:winrm_password] = "#{password}"
+
+TXT
