@@ -1,0 +1,51 @@
+#!/usr/bin/env ruby
+
+# launch:
+# Launches an EC2 instance
+
+require 'rubygems'
+require 'bundler/setup'
+
+require 'fog'
+require 'chef/config'
+require 'pathname'
+
+chef_path = Pathname.new(__FILE__).dirname.join('..', '.chef')
+
+config_file = chef_path.join('knife.rb')
+Chef::Config.from_file(config_file.to_s)
+
+compute = Fog::Compute.new(
+  provider: 'AWS',
+  aws_access_key_id: Chef::Config[:knife][:aws_access_key_id],
+  aws_secret_access_key: Chef::Config[:knife][:aws_secret_access_key]
+)
+
+print "Launching instance..."
+server = compute.servers.create(
+  availability_zone:  Chef::Config[:knife][:availability_zone],
+  image_id:           Chef::Config[:knife][:image],
+  flavor_id:          Chef::Config[:knife][:flavor],
+  key_name:           Chef::Config[:knife][:aws_ssh_key_id],
+  security_group_ids: [Chef::Config[:knife][:aws_ssh_key_id]]
+)
+server.wait_for { print "."; ready? }
+puts " done."
+
+puts <<-TXT
+
+Now connect via RDP to open up WinRM using these commands (from PowerShell):
+
+    winrm quickconfig -q
+    winrm set winrm/config/winrs '@{MaxMemoryPerShellMB="300"}'
+    winrm set winrm/config '@{MaxTimeoutms="1800000"}'
+    winrm set winrm/config/service '@{AllowUnencrypted="true"}'
+    winrm set winrm/config/service/auth '@{Basic="true"}'
+
+Then run the following command to bootstrap it:
+
+    knife bootstrap windows winrm \\
+      #{server.dns_name} \\
+      -r "role[iis_postgres]"
+
+TXT
