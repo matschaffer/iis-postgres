@@ -22,6 +22,14 @@ compute = Fog::Compute.new(
   aws_secret_access_key: Chef::Config[:knife][:aws_secret_access_key]
 )
 
+puts "Uploading cookbooks..."
+system "librarian-chef install"
+system "knife cookbook upload -a"
+
+puts "Uploading roles..."
+roles = Dir["roles/*"]
+system "knife role from file #{roles.join(' ')}"
+
 puts "Creating keypair..."
 key_name = Chef::Config[:knife][:aws_ssh_key_id]
 key_file = chef_path.join(key_name + '.pem')
